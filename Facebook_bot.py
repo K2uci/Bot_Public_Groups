@@ -13,7 +13,7 @@ def run_firefox():
     #Direccion del driver de Firefox
     path = '/home/rool/.wdm/drivers/geckodriver/linux64/v0.33.0/geckodriver'  
     options = Options()
-    #options.add_argument('--headless')#No muestra el navegador
+    options.add_argument('--headless')#No muestra el navegador
     options.add_argument('--disable-extensions')#Desabilita las extenciones del navegador
     options.add_argument('--disable-notifications')#Desabilita las notificaciones
     options.add_argument('--ignore-certificate-errors')#Ignora los certificados de error
@@ -45,13 +45,9 @@ def publicar_grupo(url):
         ran = random.randint(1,len(os.listdir('Publicaciones/'))+1)
         with open(f'Publicaciones/publicacion{ran}.txt','r') as f:file=f.readlines()
         inbox.send_keys(file)
-        #Intento de subir foto 
-        #photo = wait.until(ec.element_to_be_clickable((By.CSS_SELECTOR,'div[aria-label="Foto/vídeo]"')))         
-        #photo.send_keys(os.path.abspath('123.jpeg'))
         #Clic al boton publicar 
         #publicar = wait.until(ec.element_to_be_clickable((By.CSS_SELECTOR,'div[aria-label="Publicar"]')))  
         #publicar.click()
-
         return True
     except:
         return False
