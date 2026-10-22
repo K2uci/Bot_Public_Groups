@@ -1,7 +1,9 @@
 {
-  "nombre": "Astro Bissnes (cuenta bot)",
+  "nombre": "Astro Bissnes (cuenta principal)",
   "activo": true,
   "hora_inicio": "10:00",
+  "espera_min": 8,
+  "espera_max": 10,
   "dias_semana": null,
   "max_grupos_dia": null,
   "tg_chat_id": ""

@@ -61,14 +61,14 @@ def cargar_clientes(solo_activos=True):
     return sorted(clientes,key=lambda c:c.hora_inicio)
 
 #Funcion para crear la estructura de un cliente nuevo (queda inactivo hasta que se configure)
-def crear_cliente(slug,nombre):
+def crear_cliente(slug,nombre,espera_min,espera_max):
     c_dir = DIR_CLIENTES / slug
     if (c_dir / 'cliente.json').exists():
         print(f'El cliente {slug} ya existe')
         return
     (c_dir / 'Publicaciones').mkdir(parents=True)
     (c_dir / 'Imagenes').mkdir()
-    cfg = {'nombre':nombre,'activo':False,'hora_inicio':'10:00','dias_semana':None,'max_grupos_dia':None,'tg_chat_id':''}
+    cfg = {'nombre':nombre,'activo':False,'hora_inicio':'10:00','espera_min':espera_min,'espera_max':espera_max,'dias_semana':None,'max_grupos_dia':None,'tg_chat_id':''}
     (c_dir / 'cliente.json').write_text(json.dumps(cfg,indent=2,ensure_ascii=False),encoding='utf-8')
     (c_dir / 'grupos.txt').write_text('# Una url de grupo por linea. Las lineas con # se ignoran.\n',encoding='utf-8')
     print(f'Cliente creado en {c_dir}')
@@ -101,11 +101,18 @@ def chat_telegram():
     return ''
 
 def _enviar_telegram(chat,texto):
-    try:
-        datos = urllib.parse.urlencode({'chat_id':chat,'text':texto[:4000],'parse_mode':'HTML','disable_web_page_preview':'true'}).encode()
-        urllib.request.urlopen(f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',datos,timeout=15).read()
-    except Exception as e:
-        log.warning(f'Telegram sendMessage: {e}')
+    #Telegram admite 4096 caracteres por mensaje: se parte por lineas en trozos
+    trozos = ['']
+    for linea in texto.split('\n'):
+        if len(trozos[-1]) + len(linea) + 1 > 3800:
+            trozos.append('')
+        trozos[-1] += linea + '\n'
+    for trozo in trozos:
+        try:
+            datos = urllib.parse.urlencode({'chat_id':chat,'text':trozo.strip(),'parse_mode':'HTML','disable_web_page_preview':'true'}).encode()
+            urllib.request.urlopen(f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',datos,timeout=15).read()
+        except Exception as e:
+            log.warning(f'Telegram sendMessage: {e}')
 
 #Funcion para enviar un aviso por Telegram al administrador y, si se indica, al chat del cliente (nunca detiene el bot)
 def avisar(texto,chat_cliente=''):
@@ -161,7 +168,7 @@ def cargar_publicaciones(c):
 #Funciones para guardar y leer lo ya publicado hoy (permite reanudar si el bot se reinicia)
 def cargar_estado(c):
     hoy = datetime.now().strftime('%Y-%m-%d')
-    estado = {'fecha':hoy,'publicados':[],'fallidos':[],'motivos':{},'indice':0,'cursor':0,'en_curso':False}
+    estado = {'fecha':hoy,'publicados':[],'fallidos':[],'motivos':{},'indice':0,'cursor':0,'en_curso':False,'inicio':'','fin':'','abortada':'','bloqueo':'','nuevos_grupos':0,'resumen_enviado':False}
     if c.archivo_estado.is_file():
         guardado = json.loads(c.archivo_estado.read_text(encoding='utf-8'))
         estado['indice'] = guardado.get('indice',0)
@@ -201,6 +208,23 @@ def abrir_composer():
                 raise
             time.sleep(3)
 
+#Avisos con los que Facebook informa de un bloqueo o limite temporal de la cuenta (minusculas)
+PATRONES_BLOQUEO = ('bloqueado temporalmente','bloqueo temporal','temporalmente bloquead','restringido temporalmente','temporalmente restringid','no puedes publicar','no puedes usar esta funci','limitamos la frecuencia','hemos limitado','actividad inusual','temporarily blocked','temporarily restricted',"you can't post",'you can\u2019t post','we limit how often','unusual activity')
+
+#Funcion para detectar si Facebook limito la cuenta: busca esos avisos en ventanas y alertas de la pagina o una pagina de verificacion
+def detectar_bloqueo():
+    try:
+        if any(x in driver.current_url for x in ('checkpoint','two_step')):
+            return 'pagina de verificacion de Facebook (checkpoint)'
+        textos = driver.execute_script("return [...document.querySelectorAll('[role=\"dialog\"],[role=\"alert\"]')].map(e=>e.innerText).join(' | ')") or ''
+        textos = textos.lower()
+        for patron in PATRONES_BLOQUEO:
+            if patron in textos:
+                return f'aviso de Facebook: "{patron}"'
+    except Exception:
+        pass
+    return ''
+
 #Funcion para realizar una publicacion con texto e imagen
 def publicar_grupo(c,url,texto,imagen):
     dialogo = "//div[@role='dialog']"
@@ -225,6 +249,9 @@ def publicar_grupo(c,url,texto,imagen):
         log.error(f'[{c.slug}] Fallo al publicar en {url}: {motivo}')
         #Captura para saber que vio el bot cuando fallo
         driver.save_screenshot(str(DIR_LOGS / f'error_{c.slug}_{datetime.now():%Y%m%d_%H%M%S}.png'))
+        aviso = detectar_bloqueo()
+        if aviso:
+            motivo = f'BLOQUEO: {aviso}'
         return False,motivo
 
 #Funcion para comprobar si hay sesion iniciada
@@ -242,27 +269,46 @@ def sesion_activa(espera=90):
         time.sleep(2)
     return False
 
-#Funcion para leer los grupos a los que pertenece la cuenta y guardarlos en grupos.txt del cliente
+#Funcion para leer los grupos a los que pertenece la cuenta y sumar los nuevos a grupos.txt del cliente
+#Los grupos que ya estaban se conservan y, si la lectura falla, la lista actual no se toca; devuelve cuantos grupos nuevos entraron
 def obtener_grupos(c):
     driver.get('https://www.facebook.com/groups/joins/')
     time.sleep(5)
     excluidos = {'joins','feed','discover','create','search','notifications','your_groups'}
     encontrados = {}
     sin_nuevos = 0
-    while sin_nuevos < 4:
-        antes = len(encontrados)
-        for a in driver.find_elements(By.CSS_SELECTOR,'a[href*="/groups/"]'):
-            m = re.match(r'https://www\.facebook\.com/groups/([^/?#]+)',a.get_attribute('href') or '')
-            if m and m.group(1) not in excluidos:
-                encontrados.setdefault(m.group(1),a.text.strip().split('\n')[0] or m.group(1))
-        sin_nuevos = sin_nuevos + 1 if len(encontrados) == antes else 0
-        driver.execute_script('window.scrollTo(0, document.body.scrollHeight)')
+    errores = 0
+    while sin_nuevos < 4 and errores < 5:
+        try:
+            antes = len(encontrados)
+            for a in driver.find_elements(By.CSS_SELECTOR,'a[href*="/groups/"]'):
+                m = re.match(r'https://www\.facebook\.com/groups/([^/?#]+)',a.get_attribute('href') or '')
+                if m and m.group(1) not in excluidos:
+                    encontrados.setdefault(m.group(1),a.text.strip().split('\n')[0] or m.group(1))
+            sin_nuevos = sin_nuevos + 1 if len(encontrados) == antes else 0
+            driver.execute_script('window.scrollTo(0, document.body.scrollHeight)')
+        except Exception as e:
+            errores += 1
+            log.warning(f'[{c.slug}] Error leyendo grupos ({type(e).__name__}), reintento {errores}/5')
         time.sleep(3)
-    lineas = ['# Una url de grupo por linea. Las lineas con # se ignoran.']
-    lineas += [f'https://www.facebook.com/groups/{slug}  # {nombre}' for slug,nombre in encontrados.items()]
-    c.archivo_grupos.write_text('\n'.join(lineas)+'\n',encoding='utf-8')
-    log.info(f'[{c.slug}] Se guardaron {len(encontrados)} grupos en grupos.txt')
-    return len(encontrados)
+    if not encontrados:
+        log.warning(f'[{c.slug}] No se leyo ningun grupo, se conserva la lista actual')
+        return 0
+    actuales = {}
+    if c.archivo_grupos.is_file():
+        for linea in c.archivo_grupos.read_text(encoding='utf-8').splitlines():
+            url = linea.split('  #')[0].strip()
+            if url and not url.startswith('#'):
+                actuales[url] = linea.strip()
+    nuevos = 0
+    for slug,nombre in encontrados.items():
+        url = f'https://www.facebook.com/groups/{slug}'
+        if url not in actuales:
+            actuales[url] = f'{url}  # {nombre}'
+            nuevos += 1
+    c.archivo_grupos.write_text('# Una url de grupo por linea. Las lineas con # se ignoran.\n' + '\n'.join(actuales.values()) + '\n',encoding='utf-8')
+    log.info(f'[{c.slug}] Grupos en la cuenta: {len(encontrados)}; en grupos.txt: {len(actuales)} ({nuevos} nuevos)')
+    return nuevos
 
 #Funcion para entrar a facebook con las cookies del cliente (nunca con contrasena: no se guardan contrasenas ajenas)
 def logging_fb(c):
@@ -304,11 +350,9 @@ def ejecutar_tanda(c,estado,grupos,limite=None):
         return
     if limite is None:
         limite = c.max_grupos
-    #Los grupos rotan segun el cursor: si hay tope diario, cada dia toca un tramo distinto
-    cursor = estado['cursor'] % len(grupos) if grupos else 0
-    orden = grupos[cursor:] + grupos[:cursor]
     log.info(f'[{c.slug}] Iniciando tanda: {len(pendientes(estado,grupos))} grupos pendientes')
     estado['en_curso'] = True
+    estado['inicio'] = estado['inicio'] or datetime.now().strftime('%H:%M')
     guardar_estado(c,estado)
     driver = run_firefox()
     wait = WebDriverWait(driver,20)
@@ -317,6 +361,15 @@ def ejecutar_tanda(c,estado,grupos,limite=None):
     abortada = ''
     try:
         logging_fb(c)
+        #Cada tanda empieza revisando los grupos de la cuenta: la lista crece sola, los nuevos entran hoy mismo
+        try:
+            estado['nuevos_grupos'] += obtener_grupos(c)
+        except Exception as e:
+            log.warning(f'[{c.slug}] No se pudo revisar la lista de grupos ({type(e).__name__}), se usa la anterior')
+        grupos = cargar_grupos(c)
+        #Los grupos rotan segun el cursor: si hay tope diario, cada dia toca un tramo distinto
+        cursor = estado['cursor'] % len(grupos) if grupos else 0
+        orden = grupos[cursor:] + grupos[:cursor]
         while pendientes(estado,orden) and (limite is None or hechos < limite):
             url = pendientes(estado,orden)[0]
             #Las publicaciones rotan en orden, asi no se repite el mismo post en dias seguidos
@@ -333,9 +386,17 @@ def ejecutar_tanda(c,estado,grupos,limite=None):
                 estado['fallidos'].append(url)
                 estado['motivos'][url] = motivo
                 fallos_seguidos += 1
+                if motivo.startswith('BLOQUEO'):
+                    #Facebook limito la cuenta: seguir publicando solo lo empeora, se avisa y se detiene la tanda de hoy
+                    estado['bloqueo'] = motivo
+                    abortada = 'Facebook limito o bloqueo la cuenta, tanda detenida'
+                    log.error(f'[{c.slug}] {abortada}: {motivo}')
+                    avisar(f'🚫 <b>{esc(c.nombre)}: posible bloqueo temporal</b>\n{esc(motivo)}\nGrupo: {esc(url)}\nPublicadas hoy antes del bloqueo: {len(estado["publicados"])}',c.tg_chat)
+                    break
                 if fallos_seguidos >= MAX_FALLOS_SEGUIDOS:
                     abortada = f'{fallos_seguidos} fallos seguidos, tanda abortada'
                     log.error(f'[{c.slug}] {abortada}. Revisa logs/')
+                    avisar(f'⚠️ <b>{esc(c.nombre)}</b>: {esc(abortada)}.\nUltimo error: {esc(motivo)}',c.tg_chat)
                     break
             guardar_estado(c,estado)
             if pendientes(estado,orden) and (limite is None or hechos < limite):
@@ -351,25 +412,57 @@ def ejecutar_tanda(c,estado,grupos,limite=None):
     finally:
         driver.quit()
         estado['en_curso'] = False
+        estado['fin'] = datetime.now().strftime('%H:%M')
+        if abortada:
+            estado['abortada'] = abortada
         guardar_estado(c,estado)
-    resumen_diario(c,estado,grupos,abortada)
 
-#Funcion para enviar el resumen de la tanda por Telegram (administrador y cliente)
-def resumen_diario(c,estado,grupos,abortada=''):
-    msg = [f'📊 <b>{esc(c.nombre)} · Resumen {estado["fecha"]}</b>',
-           f'✅ Publicadas: {len(estado["publicados"])}',
-           f'❌ Fallidas: {len(estado["fallidos"])}',
-           f'⏳ Pendientes: {len(pendientes(estado,grupos))}',
-           f'📋 Total de grupos: {len(grupos)}']
-    if abortada:
-        msg.append(f'⚠️ {esc(abortada)}')
-    if estado['publicados']:
-        msg.append('\n<b>Exitos:</b>')
-        msg += [f'• {esc(u)}' for u in estado['publicados']]
-    if estado['fallidos']:
-        msg.append('\n<b>Fracasos:</b>')
-        msg += [f'• {esc(u)}\n   {esc(estado["motivos"].get(u,""))}' for u in estado['fallidos']]
+#Funcion para leer los nombres de los grupos (comentarios de grupos.txt) y mostrar nombres en vez de urls
+def nombres_grupos(c):
+    nombres = {}
+    if c.archivo_grupos.is_file():
+        for linea in c.archivo_grupos.read_text(encoding='utf-8').splitlines():
+            if '  #' in linea:
+                url,nombre = linea.split('  #',1)
+                nombres[url.strip()] = nombre.strip()
+    return nombres
+
+#Funcion para enviar el resumen del dia por Telegram (administrador y cliente); una vez al dia a HORA_RESUMEN
+def resumen_diario(c,estado,grupos,marcar=True):
+    nombres = nombres_grupos(c)
+    nombre = lambda u: esc(nombres.get(u,u))
+    if not estado['publicados'] and not estado['fallidos']:
+        msg = [f'📊 <b>{esc(c.nombre)} · Resumen del {estado["fecha"]}</b>','Hoy no se publico nada. Revisa el servicio.']
+    else:
+        horario = f'{estado["inicio"]} a {estado["fin"]}' if estado['fin'] else f'desde las {estado["inicio"]} (aun en curso)'
+        msg = [f'📊 <b>{esc(c.nombre)} · Resumen del {estado["fecha"]}</b>',
+               f'✅ Publicadas: {len(estado["publicados"])}',
+               f'❌ Fallidas: {len(estado["fallidos"])}',
+               f'⏳ Pendientes: {len(pendientes(estado,grupos))}',
+               f'📋 Grupos en la lista: {len(grupos)} ({estado["nuevos_grupos"]} nuevos hoy)',
+               f'🕙 Horario: {horario}']
+        if estado['bloqueo']:
+            msg.append(f'🚫 Bloqueo detectado: {esc(estado["bloqueo"])}')
+        elif estado['abortada']:
+            msg.append(f'⚠️ {esc(estado["abortada"])}')
+        if estado['publicados']:
+            msg.append('\n<b>Exitos:</b>')
+            msg += [f'• {nombre(u)}' for u in estado['publicados']]
+        if estado['fallidos']:
+            msg.append('\n<b>Fracasos:</b>')
+            msg += [f'• {nombre(u)}\n   {esc(estado["motivos"].get(u,""))}' for u in estado['fallidos']]
     avisar('\n'.join(msg),c.tg_chat)
+    if marcar:
+        estado['resumen_enviado'] = True
+        guardar_estado(c,estado)
+
+#Funcion que decide si ya toca enviar el resumen del dia (pasada HORA_RESUMEN, una sola vez y sin tanda en curso)
+def toca_resumen(c,estado):
+    if c.dias is not None and datetime.now().weekday() not in c.dias:
+        return False
+    hora,minuto = map(int,HORA_RESUMEN.split(':'))
+    ya_es_hora = datetime.now() >= datetime.now().replace(hour=hora,minute=minuto,second=0,microsecond=0)
+    return ya_es_hora and not estado['resumen_enviado'] and not estado['en_curso']
 
 #Funcion que decide si al cliente le toca tanda ahora
 def le_toca(c,estado,grupos):
@@ -392,15 +485,26 @@ def tanda_con_turno(c,limite=None):
     return True
 
 def uso():
-    print('Uso: python Facebook_bot.py [--nuevo <slug> "<Nombre>" | --grupos <slug> | --ahora <slug> [N] | --lista]')
+    print('Uso: python Facebook_bot.py [--nuevo <slug> "<Nombre>" <min> <max> | --grupos <slug> | --ahora <slug> [N] | --resumen <slug> | --lista]')
     print('Sin argumentos: servicio permanente (tanda diaria de cada cliente activo)')
 
 if __name__ == '__main__':
     configurar_log()
     args = sys.argv[1:]
     try:
-        if args and args[0] == '--nuevo' and len(args) >= 2:
-            crear_cliente(args[1],args[2] if len(args) > 2 else args[1])
+        if args and args[0] == '--nuevo':
+            #El intervalo entre publicaciones lo decide cada cliente: es obligatorio, no hay valor por defecto
+            try:
+                slug,nombre,minimo,maximo = args[1],args[2],float(args[3]),float(args[4])
+                assert 1 <= minimo <= maximo
+            except (IndexError,ValueError,AssertionError):
+                print('Falta o es invalido el intervalo entre publicaciones (lo decide el cliente).')
+                print('Uso: python Facebook_bot.py --nuevo <slug> "<Nombre>" <min_minutos> <max_minutos>   ej: --nuevo juan "Juan Perez" 10 15')
+                sys.exit(1)
+            crear_cliente(slug,nombre,minimo,maximo)
+        elif args and args[0] == '--resumen' and len(args) >= 2:
+            c = Cliente(args[1])
+            resumen_diario(c,cargar_estado(c),cargar_grupos(c),marcar=False)
         elif args and args[0] == '--lista':
             for c in cargar_clientes(False):
                 e = cargar_estado(c)
@@ -427,6 +531,9 @@ if __name__ == '__main__':
                     for c in cargar_clientes():
                         if le_toca(c,cargar_estado(c),cargar_grupos(c)):
                             tanda_con_turno(c)
+                        estado = cargar_estado(c)
+                        if toca_resumen(c,estado):
+                            resumen_diario(c,estado,cargar_grupos(c))
                     time.sleep(60)
                 except KeyboardInterrupt:
                     raise

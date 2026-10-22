@@ -32,7 +32,7 @@ if __name__ == '__main__':
         print(f'Sesion detectada. Cookies guardadas en {c.archivo_cookies}')
         #Aprovechamos la sesion para leer los grupos de la cuenta
         try:
-            print(f'Grupos guardados en grupos.txt: {obtener_grupos(c)}')
+            print(f'Grupos nuevos añadidos a grupos.txt: {obtener_grupos(c)}')
         except Exception as e:
             print(f'No se pudieron leer los grupos ({type(e).__name__}); se puede repetir luego con --grupos {c.slug}')
     finally:

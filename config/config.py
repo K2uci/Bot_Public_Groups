@@ -27,6 +27,8 @@ ARCHIVO_CHAT = BASE_DIR / 'config' / 'tg_chat.txt'
 
 #Valores por defecto de cada cliente (se pueden cambiar en clientes/<cliente>/cliente.json)
 HORA_INICIO = os.environ.get('HORA_INICIO', '10:00')
+#Hora (HH:MM, hora del servidor) a la que se envia el resumen diario por Telegram
+HORA_RESUMEN = os.environ.get('HORA_RESUMEN', '21:00')
 #Espera aleatoria entre una publicacion y la siguiente (en minutos)
 ESPERA_MIN = float(os.environ.get('ESPERA_MIN', '8'))
 ESPERA_MAX = float(os.environ.get('ESPERA_MAX', '10'))
