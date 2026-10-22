@@ -1,0 +1,8 @@
+{
+  "nombre": "Cuenta principal (captacion)",
+  "activo": false,
+  "hora_inicio": "10:00",
+  "dias_semana": null,
+  "max_grupos_dia": null,
+  "tg_chat_id": ""
+}

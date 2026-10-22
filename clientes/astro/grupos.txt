@@ -1,0 +1,10 @@
+# Una url de grupo por linea. Las lineas con # se ignoran.
+https://www.facebook.com/groups/647407489807750  # Venta de casas baratas en la habana
+https://www.facebook.com/groups/1006252334491000  # Venta de Casas Baratas Habana
+https://www.facebook.com/groups/637614755993012  # Compra - Venta de Casas y Apartamentos en La Habana. Cuba
+https://www.facebook.com/groups/1389367372176036  # Compra y venta de casas y aptos en la Habana
+https://www.facebook.com/groups/1868456373636577  # venta d casas en la Habana
+https://www.facebook.com/groups/701385919322623  # Venta de casas baratas en La Habana
+https://www.facebook.com/groups/1125512514573292  # Venta de Casas y Apartamentos en la Habana
+https://www.facebook.com/groups/1073860277996059  # Casas en venta baratas La Habana
+https://www.facebook.com/groups/1499299577635490  # Group title pending

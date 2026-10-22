@@ -1,0 +1,7 @@
+.env
+clientes/*/cookies.json
+clientes/*/estado.json
+config/tg_chat.txt
+config/tanda.lock
+logs/
+__pycache__/
