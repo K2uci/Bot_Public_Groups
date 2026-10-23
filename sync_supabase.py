@@ -230,6 +230,12 @@ def subir_grupos(c):
             if f['nombre'] and not f['nombre'].isdigit() and f['url'] in existentes and (not actual or actual.isdigit()):
                 actualizar('grupos',{'cliente_id':f'eq.{id_c}','url':f"eq.{f['url']}"},{'nombre':f['nombre']})
 
+#URLs de todos los grupos del cliente en la nube (activos o excluidos); vacio si no hay nube
+@seguro(set())
+def urls_conocidas(c):
+    id_c = _IDS.get(c.slug)
+    return {g['url'] for g in consultar('grupos',select='url',cliente_id=f'eq.{id_c}')} if id_c else set()
+
 #Excluye un grupo de los proximos dias (p. ej. uno de compraventa); se puede volver a incluir desde la web
 @seguro()
 def excluir_grupo(c,url):

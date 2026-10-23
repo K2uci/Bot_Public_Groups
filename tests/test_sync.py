@@ -138,6 +138,9 @@ nube.subir_grupos(c)
 parches = [r for r in RECIBIDO if r[0] == 'PATCH' and r[1].endswith('/grupos')][n_antes:]
 comprobar(len(parches) == 1 and parches[0][3] == {'nombre':'Nombre Real Uno'} and parches[0][2].get('url') == 'eq.https://www.facebook.com/groups/1','subir_grupos: solo corrige el grupo que tenia el numero como nombre')
 
+DB['grupos'] = [{'url':'https://www.facebook.com/groups/1','nombre':'Uno'},{'url':'https://www.facebook.com/groups/2','nombre':'Dos'}]
+comprobar(nube.urls_conocidas(c) == {'https://www.facebook.com/groups/1','https://www.facebook.com/groups/2'},'urls_conocidas: devuelve todos los grupos de la nube')
+
 #un grupo de compraventa omitido se excluye en la nube (activo=false) solo para ese grupo
 n_antes = len([x for x in RECIBIDO if x[0] == 'PATCH' and x[1].endswith('/grupos')])
 nube.excluir_grupo(c,'https://www.facebook.com/groups/2')

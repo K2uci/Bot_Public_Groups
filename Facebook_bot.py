@@ -344,11 +344,13 @@ def obtener_grupos(c):
             if url and not url.startswith('#'):
                 actuales[url] = linea.strip()
     nuevos = 0
+    #Los grupos que ya estan en la nube (aunque esten excluidos) no son "nuevos"
+    conocidos = nube.urls_conocidas(c)
     for slug,nombre in encontrados.items():
         url = f'https://www.facebook.com/groups/{slug}'
         if url not in actuales:
             actuales[url] = f'{url}  # {nombre}'
-            nuevos += 1
+            nuevos += url not in conocidos
         else:
             #Un grupo ya conocido sin nombre real (solo su numero) recibe el nombre ahora leido
             actual = actuales[url].split('  #',1)[1].strip() if '  #' in actuales[url] else ''
