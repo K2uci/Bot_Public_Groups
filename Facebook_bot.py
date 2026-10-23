@@ -275,26 +275,43 @@ def sesion_activa(espera=90):
 
 #Funcion para leer los grupos a los que pertenece la cuenta y sumar los nuevos a grupos.txt del cliente
 #Los grupos que ya estaban se conservan y, si la lectura falla, la lista actual no se toca; devuelve cuantos grupos nuevos entraron
+#Cada grupo tiene varios enlaces (el nombre, un boton "Ver grupo", un aviso de notificacion y un icono sin texto)
+_NO_NOMBRE = ('ver grupo','view group','no leída','no leida','unirte','join group')
+JS_ENLACES = """return [...document.querySelectorAll('a[href*="/groups/"]')].map(a => [a.href, (a.innerText||'').trim().split('\\n')[0]]);"""
+
+#Funcion para elegir el nombre real de un grupo entre los textos de todos sus enlaces
+def elegir_nombre(textos):
+    validos = []
+    for t in textos:
+        t = ' '.join(t.split())
+        bajo = t.lower()
+        if len(t) > 2 and not bajo.startswith(_NO_NOMBRE) and 'te damos la bienvenida' not in bajo:
+            validos.append(t)
+    #Se prefieren los nombres completos (los truncados acaban en "...") y, entre ellos, el que mas se repite y el mas largo
+    completos = [t for t in validos if not t.endswith(('...','…'))] or validos
+    return max(completos,key=lambda t:(completos.count(t),len(t))) if completos else ''
+
 def obtener_grupos(c):
     driver.get('https://www.facebook.com/groups/joins/')
     time.sleep(5)
     excluidos = {'joins','feed','discover','create','search','notifications','your_groups'}
-    encontrados = {}
+    candidatos = {}
     sin_nuevos = 0
     errores = 0
     while sin_nuevos < 4 and errores < 5:
         try:
-            antes = len(encontrados)
-            for a in driver.find_elements(By.CSS_SELECTOR,'a[href*="/groups/"]'):
-                m = re.match(r'https://www\.facebook\.com/groups/([^/?#]+)',a.get_attribute('href') or '')
+            antes = len(candidatos)
+            for href,texto in driver.execute_script(JS_ENLACES):
+                m = re.match(r'https://www\.facebook\.com/groups/([^/?#]+)',href or '')
                 if m and m.group(1) not in excluidos:
-                    encontrados.setdefault(m.group(1),a.text.strip().split('\n')[0] or m.group(1))
-            sin_nuevos = sin_nuevos + 1 if len(encontrados) == antes else 0
+                    candidatos.setdefault(m.group(1),[]).append(texto or '')
+            sin_nuevos = sin_nuevos + 1 if len(candidatos) == antes else 0
             driver.execute_script('window.scrollTo(0, document.body.scrollHeight)')
         except Exception as e:
             errores += 1
             log.warning(f'[{c.slug}] Error leyendo grupos ({type(e).__name__}), reintento {errores}/5')
         time.sleep(3)
+    encontrados = {slug:elegir_nombre(textos) or slug for slug,textos in candidatos.items()}
     if not encontrados:
         log.warning(f'[{c.slug}] No se leyo ningun grupo, se conserva la lista actual')
         return 0
@@ -310,6 +327,11 @@ def obtener_grupos(c):
         if url not in actuales:
             actuales[url] = f'{url}  # {nombre}'
             nuevos += 1
+        else:
+            #Un grupo ya conocido sin nombre real (solo su numero) recibe el nombre ahora leido
+            actual = actuales[url].split('  #',1)[1].strip() if '  #' in actuales[url] else ''
+            if nombre != slug and (not actual or actual.isdigit()):
+                actuales[url] = f'{url}  # {nombre}'
     c.archivo_grupos.write_text('# Una url de grupo por linea. Las lineas con # se ignoran.\n' + '\n'.join(actuales.values()) + '\n',encoding='utf-8')
     log.info(f'[{c.slug}] Grupos en la cuenta: {len(encontrados)}; en grupos.txt: {len(actuales)} ({nuevos} nuevos)')
     return nuevos

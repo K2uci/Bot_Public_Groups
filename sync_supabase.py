@@ -223,6 +223,12 @@ def subir_grupos(c):
             filas.append({'cliente_id':id_c,'url':url,'nombre':nombre})
     if filas:
         insertar('grupos',filas,resolucion='ignore-duplicates',on_conflict='cliente_id,url')
+        #Los grupos que ya estaban sin nombre real (solo el numero) reciben el nombre leido
+        existentes = {g['url']:g['nombre'] for g in consultar('grupos',select='url,nombre',cliente_id=f'eq.{id_c}')}
+        for f in filas:
+            actual = existentes.get(f['url'])
+            if f['nombre'] and not f['nombre'].isdigit() and f['url'] in existentes and (not actual or actual.isdigit()):
+                actualizar('grupos',{'cliente_id':f'eq.{id_c}','url':f"eq.{f['url']}"},{'nombre':f['nombre']})
 
 #------------------------------------------------------------------ ordenes de la web
 @seguro([])

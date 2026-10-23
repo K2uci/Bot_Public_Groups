@@ -8,6 +8,7 @@ import {
 import Shell from "@/components/Shell";
 import ConfigFields from "@/components/ConfigFields";
 import CookiesUpload from "@/components/CookiesUpload";
+import ImagenInput from "@/components/ImagenInput";
 import SubmitButton from "@/components/SubmitButton";
 import { Badge, CardHead, Empty, PageHead, Stat, type Tono } from "@/components/ui";
 import { requireAdmin } from "@/lib/auth";
@@ -187,7 +188,7 @@ export default async function ClienteDetalle({
             </label>
             <label>
               Imagen
-              <input name="imagen" type="file" accept="image/jpeg,image/png,image/webp" required />
+              <ImagenInput />
               <span className="hint">JPG, PNG o WEBP, máximo 4 MB.</span>
             </label>
             <div><SubmitButton pendingText="Subiendo…">Añadir publicación</SubmitButton></div>

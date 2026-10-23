@@ -127,6 +127,17 @@ nube.subir_grupos(c)
 ult = [r for r in RECIBIDO if r[1].endswith('/grupos') and r[0] == 'POST'][-1]
 comprobar(ult[2].get('on_conflict') == 'cliente_id,url' and 'ignore-duplicates' in ult[4].get('Prefer','') and len(ult[3]) == 2,'subir grupos: ignore-duplicates (no pisa los desactivados)')
 
+#------------------------------------------------------------------ 2b. nombres de grupos
+comprobar(bot.elegir_nombre(['No leídaTe damos la bienvenida a Venta Por Cantidad... Ahora','','Venta Por Cantidad y Contenedores Para Mayoristas','Ver grupo']) == 'Venta Por Cantidad y Contenedores Para Mayoristas','elegir_nombre: ignora avisos, botones y nombres truncados')
+comprobar(bot.elegir_nombre(['','Ver grupo']) == '','elegir_nombre: sin nombre valido devuelve vacio')
+#un grupo que estaba en la nube solo con su numero recibe el nombre real; uno que ya tenia nombre no se toca
+DB['grupos'] = [{'url':'https://www.facebook.com/groups/1','nombre':'123456'},{'url':'https://www.facebook.com/groups/2','nombre':'Nombre ya bueno'}]
+(d / 'grupos.txt').write_text('\n'.join(['https://www.facebook.com/groups/1  # Nombre Real Uno','https://www.facebook.com/groups/2  # Otro nombre']) + '\n',encoding='utf-8')
+n_antes = len([r for r in RECIBIDO if r[0] == 'PATCH' and r[1].endswith('/grupos')])
+nube.subir_grupos(c)
+parches = [r for r in RECIBIDO if r[0] == 'PATCH' and r[1].endswith('/grupos')][n_antes:]
+comprobar(len(parches) == 1 and parches[0][3] == {'nombre':'Nombre Real Uno'} and parches[0][2].get('url') == 'eq.https://www.facebook.com/groups/1','subir_grupos: solo corrige el grupo que tenia el numero como nombre')
+
 #------------------------------------------------------------------ 3. ordenes y pausa
 bot.procesar_ordenes()
 patch = [r for r in RECIBIDO if r[0] == 'PATCH' and r[1].endswith('/ordenes')]
