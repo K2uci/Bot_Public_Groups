@@ -1,7 +1,16 @@
 .env
 clientes/*/cookies.json
+clientes/*/cookies.version
 clientes/*/estado.json
 config/tg_chat.txt
 config/tanda.lock
+config/cookie_private.pem
+config/cookie_public.b64
 logs/
 __pycache__/
+supabase/.db-password
+supabase/.temp/
+supabase/.branches/
+ADMIN_CREDENCIALES.txt
+web/.vercel/
+supabase/.service-key

@@ -9,6 +9,7 @@ from datetime import datetime
 from config.config import *
 import json,logging,os,random,re,sys,time,html
 import urllib.request,urllib.parse
+import sync_supabase as nube
 
 log = logging.getLogger('bot')
 #Navegador y espera compartidos por las funciones de una tanda
@@ -179,6 +180,9 @@ def cargar_estado(c):
 
 def guardar_estado(c,estado):
     c.archivo_estado.write_text(json.dumps(estado,indent=2),encoding='utf-8')
+    if nube.ACTIVO:
+        grupos = cargar_grupos(c)
+        nube.subir_estado(c,estado,len(grupos),len(pendientes(estado,grupos)))
 
 def pendientes(estado,grupos):
     return [g for g in grupos if g not in estado['publicados'] and g not in estado['fallidos']]
@@ -340,13 +344,27 @@ def tomar_turno():
 def soltar_turno():
     ARCHIVO_LOCK.unlink(missing_ok=True)
 
+#Funcion para esperar entre publicaciones: mantiene el latido y comprueba si desde la web pausaron al cliente
+def esperar(c,segundos):
+    fin = time.time() + segundos
+    while time.time() < fin:
+        time.sleep(min(30,max(0,fin - time.time())))
+        if nube.ACTIVO:
+            nube.latido(f'publicando: {c.nombre}')
+            if not nube.cliente_activo(c.slug):
+                return False
+    return True
+
 #Funcion que publica en los grupos pendientes de hoy del cliente, uno cada 8 a 10 minutos
-def ejecutar_tanda(c,estado,grupos,limite=None):
+def ejecutar_tanda(c,estado,grupos,limite=None,manual=False):
     global driver,wait
     publicaciones = cargar_publicaciones(c)
     if not publicaciones:
         log.error(f'[{c.slug}] No hay publicaciones con imagen, se cancela la tanda')
         avisar(f'⚠️ <b>{esc(c.nombre)}</b>: no hay publicaciones con imagen, tanda cancelada.')
+        #Se da por abortada hasta manana: si no, se reintentaria (y avisaria) cada minuto
+        estado['abortada'] = 'Sin publicaciones con imagen'
+        guardar_estado(c,estado)
         return
     if limite is None:
         limite = c.max_grupos
@@ -364,6 +382,9 @@ def ejecutar_tanda(c,estado,grupos,limite=None):
         #Cada tanda empieza revisando los grupos de la cuenta: la lista crece sola, los nuevos entran hoy mismo
         try:
             estado['nuevos_grupos'] += obtener_grupos(c)
+            #Con Supabase: los grupos nuevos suben a la web y se vuelve a bajar la lista (respeta los desactivados)
+            nube.subir_grupos(c)
+            nube.bajar_grupos(c)
         except Exception as e:
             log.warning(f'[{c.slug}] No se pudo revisar la lista de grupos ({type(e).__name__}), se usa la anterior')
         grupos = cargar_grupos(c)
@@ -378,6 +399,7 @@ def ejecutar_tanda(c,estado,grupos,limite=None):
             log.info(f'[{c.slug}] Publicando {txt.stem} en el grupo: {url}')
             hechos += 1
             ok,motivo = publicar_grupo(c,url,txt.read_text(encoding='utf-8'),imagen)
+            nube.registrar(c,estado['fecha'],url,nombres_grupos(c).get(url),txt.stem,ok,motivo)
             if ok:
                 estado['publicados'].append(url)
                 fallos_seguidos = 0
@@ -402,12 +424,17 @@ def ejecutar_tanda(c,estado,grupos,limite=None):
             if pendientes(estado,orden) and (limite is None or hechos < limite):
                 espera = random.uniform(c.espera_min*60,c.espera_max*60)
                 log.info(f'[{c.slug}] Siguiente publicacion en {espera/60:.1f} min')
-                time.sleep(espera)
+                if not esperar(c,espera) and not manual:
+                    abortada = 'Cliente pausado desde la web, tanda detenida'
+                    log.warning(f'[{c.slug}] {abortada}')
+                    break
         estado['cursor'] = (cursor + hechos) % len(grupos) if grupos else 0
         log.info(f'[{c.slug}] Tanda terminada: {len(estado["publicados"])} publicados, {len(estado["fallidos"])} fallidos')
     except LoginError as e:
         log.error(f'Login: {e}')
         avisar(f'🚨 <b>{esc(c.nombre)}: error de login</b>\n{esc(e)}')
+        #Se da por abortada hasta manana: reintentar el login cada minuto levantaria sospechas en Facebook
+        abortada = f'Error de login: {str(e)[:150]}'
         return
     finally:
         driver.quit()
@@ -471,21 +498,65 @@ def le_toca(c,estado,grupos):
         return False
     #Pasada la hora de inicio arranca la tanda del dia; si el bot cayo a mitad de una tanda (en_curso) la retoma
     sin_empezar = not estado['publicados'] and not estado['fallidos']
-    return ahora >= c.inicio_hoy() and bool(pendientes(estado,grupos)) and (sin_empezar or estado['en_curso'])
+    return ahora >= c.inicio_hoy() and bool(pendientes(estado,grupos)) and ((sin_empezar and not estado['abortada']) or estado['en_curso'])
 
 #Funcion para correr una tanda con su turno (manual o programada); devuelve False si hay otra en marcha
-def tanda_con_turno(c,limite=None):
+def tanda_con_turno(c,limite=None,manual=False):
     if not tomar_turno():
         log.warning(f'[{c.slug}] Hay otra tanda en marcha, se intentara mas tarde')
         return False
     try:
-        ejecutar_tanda(c,cargar_estado(c),cargar_grupos(c),limite)
+        ejecutar_tanda(c,cargar_estado(c),cargar_grupos(c),limite,manual)
     finally:
         soltar_turno()
     return True
 
+#Funcion para releer los grupos de la cuenta de un cliente (orden "leer_grupos" de la web); devuelve los grupos nuevos
+def leer_grupos(c):
+    global driver,wait
+    if not tomar_turno():
+        raise RuntimeError('hay una tanda en marcha')
+    driver = run_firefox()
+    wait = WebDriverWait(driver,20)
+    try:
+        logging_fb(c)
+        nuevos = obtener_grupos(c)
+        nube.subir_grupos(c)
+        nube.bajar_grupos(c)
+        return nuevos
+    finally:
+        driver.quit()
+        soltar_turno()
+
+#Funcion para ejecutar las ordenes que llegan desde la web (publicar ahora, releer grupos, enviar resumen)
+def procesar_ordenes():
+    for o in nube.ordenes_pendientes():
+        nube.marcar_orden(o['id'],'en_proceso')
+        try:
+            slug = nube.slug_de(o['cliente_id'])
+            if not slug:
+                raise RuntimeError('cliente no encontrado en el bot')
+            c = Cliente(slug)
+            if o['tipo'] == 'publicar_ahora':
+                #Publica en los grupos que queden pendientes hoy, sin esperar a la hora de inicio ni al dia de la semana
+                if not tanda_con_turno(c,(o.get('parametros') or {}).get('limite'),manual=True):
+                    raise RuntimeError('hay otra tanda en marcha')
+                e = cargar_estado(c)
+                resultado = f'{len(e["publicados"])} publicadas y {len(e["fallidos"])} fallidas hoy; {len(pendientes(e,cargar_grupos(c)))} pendientes'
+            elif o['tipo'] == 'leer_grupos':
+                resultado = f'{leer_grupos(c)} grupos nuevos'
+            elif o['tipo'] == 'enviar_resumen':
+                resumen_diario(c,cargar_estado(c),cargar_grupos(c),marcar=False)
+                resultado = 'resumen enviado'
+            else:
+                raise RuntimeError(f'orden desconocida: {o["tipo"]}')
+            nube.marcar_orden(o['id'],'hecha',resultado)
+        except Exception as e:
+            log.error(f'[nube] orden {o["id"]} ({o["tipo"]}): {e}')
+            nube.marcar_orden(o['id'],'error',f'{type(e).__name__}: {e}')
+
 def uso():
-    print('Uso: python Facebook_bot.py [--nuevo <slug> "<Nombre>" <min> <max> | --grupos <slug> | --ahora <slug> [N] | --resumen <slug> | --lista]')
+    print('Uso: python Facebook_bot.py [--nuevo <slug> "<Nombre>" <min> <max> | --grupos <slug> | --ahora <slug> [N] | --resumen <slug> | --sync | --lista]')
     print('Sin argumentos: servicio permanente (tanda diaria de cada cliente activo)')
 
 if __name__ == '__main__':
@@ -518,15 +589,22 @@ if __name__ == '__main__':
                 driver.quit()
         elif args and args[0] == '--ahora' and len(args) >= 2:
             limite = int(args[2]) if len(args) > 2 and args[2].isdigit() else None
-            tanda_con_turno(Cliente(args[1]),limite)
+            tanda_con_turno(Cliente(args[1]),limite,manual=True)
+        elif args and args[0] == '--sync':
+            print(f'Supabase {"activo" if nube.ACTIVO else "NO configurado"}; clientes bajados: {nube.bajar_todo()}')
         elif args:
             uso()
         else:
             #Servicio permanente: al arrancar se libera un turno que haya quedado colgado por una caida
             soltar_turno()
-            log.info('Servicio iniciado: ' + ', '.join(f'{c.slug} {c.hora_inicio}' for c in cargar_clientes()))
+            log.info('Servicio iniciado' + (' (Supabase activo)' if nube.ACTIVO else ' (solo archivos)'))
             while True:
                 try:
+                    #Con Supabase: latido, configuracion de la web y ordenes pendientes antes de revisar las tandas
+                    if nube.ACTIVO:
+                        nube.latido()
+                        nube.bajar_todo()
+                        procesar_ordenes()
                     #Los clientes se releen en cada vuelta: un cliente nuevo se activa sin reiniciar
                     for c in cargar_clientes():
                         if le_toca(c,cargar_estado(c),cargar_grupos(c)):
