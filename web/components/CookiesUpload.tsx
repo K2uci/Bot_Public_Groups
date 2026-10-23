@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { AlertCircle, CheckCircle2, Loader2, Upload } from "lucide-react";
 import { cifrarCookies } from "@/lib/crypto";
 import { guardarCookies } from "@/app/actions";
 
@@ -37,11 +38,19 @@ export default function CookiesUpload({ clienteId }: { clienteId: string }) {
 
   return (
     <div className="stack">
-      <label>
-        Subir cookies.json (se cifran en tu navegador antes de enviarse)
-        <input type="file" accept=".json,application/json" onChange={subir} disabled={ocupado} />
+      <label className="dropzone" style={{ cursor: ocupado ? "progress" : "pointer", flexDirection: "row" }}>
+        {ocupado ? <Loader2 size={26} className="spin" aria-hidden /> : <Upload size={26} aria-hidden />}
+        <span style={{ display: "flex", flexDirection: "column", gap: 2, color: "var(--text)" }}>
+          <strong>{ocupado ? "Cifrando y subiendo…" : "Subir cookies.json"}</strong>
+          <span className="hint">Se cifran en tu navegador antes de enviarse; el servidor nunca las ve en claro.</span>
+        </span>
+        <input type="file" accept=".json,application/json" onChange={subir} disabled={ocupado} style={{ display: "none" }} />
       </label>
-      {estado && <p className={estado.ok ? "ok" : "error"}>{estado.texto}</p>}
+      {estado && (
+        <p className={`msg ${estado.ok ? "ok" : "error"}`} role="status">
+          {estado.ok ? <CheckCircle2 size={16} aria-hidden /> : <AlertCircle size={16} aria-hidden />} {estado.texto}
+        </p>
+      )}
     </div>
   );
 }

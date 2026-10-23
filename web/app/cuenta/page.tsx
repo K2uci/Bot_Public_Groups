@@ -1,29 +1,41 @@
+import type { Metadata } from "next";
+import { AlertCircle, CheckCircle2, ShieldCheck } from "lucide-react";
 import Shell from "@/components/Shell";
+import SubmitButton from "@/components/SubmitButton";
+import { CardHead, PageHead } from "@/components/ui";
 import { cambiarPassword } from "@/app/actions";
 import { requireAdmin } from "@/lib/auth";
 import { usuarioDeCorreo } from "@/lib/usuario";
 
+export const metadata: Metadata = { title: "Cuenta" };
+
 export default async function Cuenta({ searchParams }: { searchParams: Promise<{ ok?: string; error?: string }> }) {
   const { user } = await requireAdmin();
   const { ok, error } = await searchParams;
+  const errores: Record<string, string> = {
+    distintas: "Las contraseñas no coinciden.",
+    corta: "Debe tener al menos 12 caracteres.",
+    fallo: "No se pudo cambiar la contraseña.",
+  };
   return (
     <Shell>
-      <h1>Cuenta</h1>
-      <form action={cambiarPassword} className="card stack" style={{ maxWidth: 420 }}>
-        <p>Usuario: <strong>{usuarioDeCorreo(user.email)}</strong></p>
+      <PageHead title="Cuenta" subtitle={<>Sesión iniciada como <strong>{usuarioDeCorreo(user.email)}</strong></>} />
+      <form action={cambiarPassword} className="card stack" style={{ maxWidth: 460 }}>
+        <CardHead icono={ShieldCheck} titulo="Cambiar contraseña" />
         <label>
-          Nueva contraseña (mínimo 12 caracteres)
+          Nueva contraseña
           <input name="nueva" type="password" autoComplete="new-password" minLength={12} required />
+          <span className="hint">Mínimo 12 caracteres.</span>
         </label>
         <label>
           Repetir contraseña
           <input name="repetir" type="password" autoComplete="new-password" minLength={12} required />
         </label>
-        {ok && <p className="ok">Contraseña actualizada.</p>}
-        {error === "distintas" && <p className="error">Las contraseñas no coinciden.</p>}
-        {error === "corta" && <p className="error">Debe tener al menos 12 caracteres.</p>}
-        {error === "fallo" && <p className="error">No se pudo cambiar la contraseña.</p>}
-        <button type="submit">Cambiar contraseña</button>
+        {ok && <p className="msg ok"><CheckCircle2 size={16} aria-hidden /> Contraseña actualizada.</p>}
+        {error && errores[error] && <p className="msg error" role="alert"><AlertCircle size={16} aria-hidden /> {errores[error]}</p>}
+        <div>
+          <SubmitButton pendingText="Guardando…">Cambiar contraseña</SubmitButton>
+        </div>
       </form>
     </Shell>
   );
