@@ -230,6 +230,13 @@ def subir_grupos(c):
             if f['nombre'] and not f['nombre'].isdigit() and f['url'] in existentes and (not actual or actual.isdigit()):
                 actualizar('grupos',{'cliente_id':f'eq.{id_c}','url':f"eq.{f['url']}"},{'nombre':f['nombre']})
 
+#Excluye un grupo de los proximos dias (p. ej. uno de compraventa); se puede volver a incluir desde la web
+@seguro()
+def excluir_grupo(c,url):
+    id_c = _IDS.get(c.slug)
+    if id_c:
+        actualizar('grupos',{'cliente_id':f'eq.{id_c}','url':f'eq.{url}'},{'activo':False})
+
 #------------------------------------------------------------------ ordenes de la web
 @seguro([])
 def ordenes_pendientes():

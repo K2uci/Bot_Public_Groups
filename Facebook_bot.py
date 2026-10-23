@@ -198,12 +198,25 @@ def escribir_texto(caja,texto):
             caja.send_keys(Keys.SHIFT,Keys.ENTER)
 
 #Funcion para abrir el cuadro de publicacion; si un popup de Facebook lo tapa se cierra con Escape y se reintenta
+class GrupoCompraventa(Exception):
+    pass
+
+#Los grupos de compraventa no tienen "Escribe algo": solo el boton "Vender algo", que abre un formulario de producto
+def es_compraventa():
+    try:
+        return bool(driver.find_elements(By.XPATH,"//span[contains(text(),'Vender algo') or contains(text(),'Sell something')]"))
+    except Exception:
+        return False
+
 def abrir_composer():
     xpath = "//span[contains(text(),'Escribe algo') or contains(text(),'Write something')]"
     time.sleep(5)
     for intento in range(4):
         driver.find_element(By.TAG_NAME,'body').send_keys(Keys.ESCAPE)
         time.sleep(2)
+        #Sin cuadro de publicacion normal y con "Vender algo": no se insiste (antes se perdian ~2 minutos en cada uno)
+        if not driver.find_elements(By.XPATH,xpath) and es_compraventa():
+            raise GrupoCompraventa()
         try:
             wait.until(ec.element_to_be_clickable((By.XPATH,xpath))).click()
             return
@@ -232,24 +245,33 @@ def detectar_bloqueo():
 #Funcion para realizar una publicacion con texto e imagen
 def publicar_grupo(c,url,texto,imagen):
     dialogo = "//div[@role='dialog']"
+    etapa = 'abrir el grupo'
     try:
         driver.get(url)
         #Abrimos el contenedor de publicaciones
+        etapa = 'abrir el cuadro de publicacion'
         abrir_composer()
         #Aqui va el texto de la publicacion
+        etapa = 'escribir el texto'
         caja = wait.until(ec.element_to_be_clickable((By.XPATH,f"{dialogo}//div[@role='textbox' and @contenteditable='true']")))
         escribir_texto(caja,texto)
         #El cuadro ya incluye el input de archivo, no hace falta pulsar el boton de foto
+        etapa = 'adjuntar la imagen'
         archivo = wait.until(ec.presence_of_element_located((By.XPATH,f"{dialogo}//input[@type='file' and contains(@accept,'image')]")))
         archivo.send_keys(str(imagen))
         #Clic al boton publicar (solo se habilita cuando la imagen termino de subir)
+        etapa = 'pulsar Publicar (la imagen no termino de subir o el boton no se activo)'
         publicar = WebDriverWait(driver,90).until(ec.element_to_be_clickable((By.XPATH,f"{dialogo}//div[@role='button' and (@aria-label='Publicar' or @aria-label='Post') and not(@aria-disabled='true')]")))
         publicar.click()
         #El dialogo se cierra cuando la publicacion fue enviada
+        etapa = 'confirmar el envio'
         WebDriverWait(driver,90).until(ec.invisibility_of_element_located((By.XPATH,dialogo)))
         return True,''
+    except GrupoCompraventa:
+        return False,'OMITIDO: grupo de compraventa, solo admite "Vender algo" (no se publico nada)'
     except Exception as e:
-        motivo = f'{type(e).__name__} {str(e)[:100]}'.strip()
+        #Mensaje legible: en que paso fallo y de que tipo (el texto tecnico de Selenium solo trae una traza larga)
+        motivo = f'No se pudo {etapa} ({type(e).__name__})'
         log.error(f'[{c.slug}] Fallo al publicar en {url}: {motivo}')
         #Captura para saber que vio el bot cuando fallo
         driver.save_screenshot(str(DIR_LOGS / f'error_{c.slug}_{datetime.now():%Y%m%d_%H%M%S}.png'))
@@ -429,6 +451,15 @@ def ejecutar_tanda(c,estado,grupos,limite=None,manual=False):
             else:
                 estado['fallidos'].append(url)
                 estado['motivos'][url] = motivo
+                if motivo.startswith('OMITIDO'):
+                    #No se publico nada ni hubo riesgo: no cuenta como fallo, no se espera y el grupo se excluye de los proximos dias
+                    log.warning(f'[{c.slug}] {motivo}: {url}')
+                    nube.excluir_grupo(c,url)
+                    nube.bajar_grupos(c)
+                    hechos -= 1
+                    estado['indice'] -= 1
+                    guardar_estado(c,estado)
+                    continue
                 fallos_seguidos += 1
                 if motivo.startswith('BLOQUEO'):
                     #Facebook limito la cuenta: seguir publicando solo lo empeora, se avisa y se detiene la tanda de hoy

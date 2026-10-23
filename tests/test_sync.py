@@ -138,6 +138,12 @@ nube.subir_grupos(c)
 parches = [r for r in RECIBIDO if r[0] == 'PATCH' and r[1].endswith('/grupos')][n_antes:]
 comprobar(len(parches) == 1 and parches[0][3] == {'nombre':'Nombre Real Uno'} and parches[0][2].get('url') == 'eq.https://www.facebook.com/groups/1','subir_grupos: solo corrige el grupo que tenia el numero como nombre')
 
+#un grupo de compraventa omitido se excluye en la nube (activo=false) solo para ese grupo
+n_antes = len([x for x in RECIBIDO if x[0] == 'PATCH' and x[1].endswith('/grupos')])
+nube.excluir_grupo(c,'https://www.facebook.com/groups/2')
+parches = [x for x in RECIBIDO if x[0] == 'PATCH' and x[1].endswith('/grupos')][n_antes:]
+comprobar(len(parches) == 1 and parches[0][3] == {'activo':False} and parches[0][2].get('url') == 'eq.https://www.facebook.com/groups/2','excluir_grupo: pone activo=false solo en ese grupo')
+
 #------------------------------------------------------------------ 3. ordenes y pausa
 bot.procesar_ordenes()
 patch = [r for r in RECIBIDO if r[0] == 'PATCH' and r[1].endswith('/ordenes')]
